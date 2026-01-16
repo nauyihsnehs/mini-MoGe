@@ -17,7 +17,7 @@ import torch.version
 import utils3d
 from huggingface_hub import hf_hub_download
 
-from ..utils import normalized_view_plane_uv, recover_focal_shift
+from .utils import normalized_view_plane_uv, recover_focal_shift
 from .dinov2.models.vision_transformer import DinoVisionTransformer
 
 

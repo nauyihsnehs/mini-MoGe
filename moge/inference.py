@@ -5,7 +5,8 @@ from typing import Dict, Optional, Union
 
 import torch
 
-from moge.model.v2 import MoGeModel
+from moge.model import MoGeModel
+
 
 def intrinsics_to_fov(intrinsics: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     focal_x = intrinsics[..., 0, 0]
@@ -75,3 +76,44 @@ class MoGeDepthModel:
             "fov_x": torch.rad2deg(fov_x_rad),
             "fov_y": torch.rad2deg(fov_y_rad),
         }
+
+
+class DepthBatchInferencer:
+    def __init__(self, model: MoGeDepthModel) -> None:
+        self.model = model
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: Union[str, Path],
+        device: Union[str, torch.device] = "cuda",
+        use_fp16: bool = False,
+        **hf_kwargs,
+    ) -> "DepthBatchInferencer":
+        model = MoGeDepthModel.from_pretrained(
+            pretrained_model_name_or_path=pretrained_model_name_or_path,
+            device=device,
+            use_fp16=use_fp16,
+            **hf_kwargs,
+        )
+        return cls(model)
+
+    @property
+    def device(self) -> torch.device:
+        return self.model.device
+
+    def infer_batch(
+        self,
+        images: torch.Tensor,
+        fov_x: Optional[float] = None,
+        resolution_level: int = 9,
+        num_tokens: Optional[int] = None,
+        use_fp16: Optional[bool] = None,
+    ) -> Dict[str, torch.Tensor]:
+        return self.model.infer_depth(
+            images,
+            fov_x=fov_x,
+            resolution_level=resolution_level,
+            num_tokens=num_tokens,
+            use_fp16=use_fp16,
+        )
