@@ -1,24 +1,23 @@
-from typing import *
-from numbers import Number
-from functools import partial
-from pathlib import Path
 import functools
 import importlib
 import itertools
 import warnings
+from numbers import Number
+from pathlib import Path
+from typing import *
 
 import torch
+import torch.amp
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils
 import torch.utils.checkpoint
-import torch.amp
 import torch.version
-import utils3d
 from huggingface_hub import hf_hub_download
 
-from .utils import normalized_view_plane_uv, recover_focal_shift
+import utils3d
 from .dinov2.models.vision_transformer import DinoVisionTransformer
+from .utils import normalized_view_plane_uv, recover_focal_shift
 
 
 def wrap_module_with_gradient_checkpointing(module: nn.Module):

@@ -1,21 +1,18 @@
-from typing import *
-import time
-from pathlib import Path
-from numbers import Number
-from functools import wraps, partial
-import warnings
-import math
-import json
-import os
 import importlib
 import importlib.util
+import math
+import os
+import time
+import warnings
+from functools import wraps, partial
+from typing import *
 
 import cv2
 import numpy as np
-from scipy.signal import fftconvolve
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from scipy.signal import fftconvolve
+
 import utils3d
 
 
@@ -231,7 +228,6 @@ def strip_common_prefix_suffix(strings: List[str]) -> List[str]:
 
 def multithead_execute(inputs: List[Any], num_workers: int, pbar = None):
     from concurrent.futures import ThreadPoolExecutor
-    from contextlib import nullcontext
     from tqdm import tqdm
 
     if pbar is not None:
