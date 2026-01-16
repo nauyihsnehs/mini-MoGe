@@ -15,18 +15,19 @@ import torch.utils.checkpoint
 import torch.version
 from huggingface_hub import hf_hub_download
 
-import utils3d
-from .dinov2.models.vision_transformer import DinoVisionTransformer
-from .utils import normalized_view_plane_uv, recover_focal_shift
+import moge_utils3d as utils3d
+from dinov2.models.vision_transformer import DinoVisionTransformer
+from moge_utils import normalized_view_plane_uv, recover_focal_shift
 
 
 def wrap_module_with_gradient_checkpointing(module: nn.Module):
     from torch.utils.checkpoint import checkpoint
     class _CheckpointingWrapper(module.__class__):
         _restore_cls = module.__class__
+
         def forward(self, *args, **kwargs):
             return checkpoint(super().forward, *args, use_reentrant=False, **kwargs)
-        
+
     module.__class__ = _CheckpointingWrapper
     return module
 
@@ -37,19 +38,21 @@ def unwrap_module_with_gradient_checkpointing(module: nn.Module):
 
 def wrap_dinov2_attention_with_sdpa(module: nn.Module):
     assert torch.__version__ >= '2.0', "SDPA requires PyTorch 2.0 or later"
+
     class _AttentionWrapper(module.__class__):
         def forward(self, x: torch.Tensor, attn_bias=None) -> torch.Tensor:
             B, N, C = x.shape
             qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)  # (3, B, H, N, C // H)
 
-            q, k, v = torch.unbind(qkv, 0)      # (B, H, N, C // H)
+            q, k, v = torch.unbind(qkv, 0)  # (B, H, N, C // H)
 
             x = F.scaled_dot_product_attention(q, k, v, attn_bias)
-            x = x.permute(0, 2, 1, 3).reshape(B, N, C) 
+            x = x.permute(0, 2, 1, 3).reshape(B, N, C)
 
             x = self.proj(x)
             x = self.proj_drop(x)
             return x
+
     module.__class__ = _AttentionWrapper
     return module
 
@@ -65,29 +68,29 @@ def sync_ddp_hook(state, bucket: torch.distributed.GradBucket) -> torch.futures.
     return fut
 
 
-class ResidualConvBlock(nn.Module):  
+class ResidualConvBlock(nn.Module):
     def __init__(
-        self, 
-        in_channels: int, 
-        out_channels: int = None, 
-        hidden_channels: int = None, 
-        kernel_size: int = 3, 
-        padding_mode: str = 'replicate', 
-        activation: Literal['relu', 'leaky_relu', 'silu', 'elu'] = 'relu', 
-        in_norm: Literal['group_norm', 'layer_norm', 'instance_norm', 'none'] = 'layer_norm',
-        hidden_norm: Literal['group_norm', 'layer_norm', 'instance_norm'] = 'group_norm',
-    ):  
-        super(ResidualConvBlock, self).__init__()  
-        if out_channels is None:  
+            self,
+            in_channels: int,
+            out_channels: int = None,
+            hidden_channels: int = None,
+            kernel_size: int = 3,
+            padding_mode: str = 'replicate',
+            activation: Literal['relu', 'leaky_relu', 'silu', 'elu'] = 'relu',
+            in_norm: Literal['group_norm', 'layer_norm', 'instance_norm', 'none'] = 'layer_norm',
+            hidden_norm: Literal['group_norm', 'layer_norm', 'instance_norm'] = 'group_norm',
+    ):
+        super(ResidualConvBlock, self).__init__()
+        if out_channels is None:
             out_channels = in_channels
         if hidden_channels is None:
             hidden_channels = in_channels
 
-        if activation =='relu':
+        if activation == 'relu':
             activation_cls = nn.ReLU
         elif activation == 'leaky_relu':
             activation_cls = functools.partial(nn.LeakyReLU, negative_slope=0.2)
-        elif activation =='silu':
+        elif activation == 'silu':
             activation_cls = nn.SiLU
         elif activation == 'elu':
             activation_cls = nn.ELU
@@ -97,25 +100,25 @@ class ResidualConvBlock(nn.Module):
         self.layers = nn.Sequential(
             nn.GroupNorm(in_channels // 32, in_channels) if in_norm == 'group_norm' else \
                 nn.GroupNorm(1, in_channels) if in_norm == 'layer_norm' else \
-                nn.InstanceNorm2d(in_channels) if in_norm == 'instance_norm' else \
-                nn.Identity(),
+                    nn.InstanceNorm2d(in_channels) if in_norm == 'instance_norm' else \
+                        nn.Identity(),
             activation_cls(),
             nn.Conv2d(in_channels, hidden_channels, kernel_size=kernel_size, padding=kernel_size // 2, padding_mode=padding_mode),
             nn.GroupNorm(hidden_channels // 32, hidden_channels) if hidden_norm == 'group_norm' else \
                 nn.GroupNorm(1, hidden_channels) if hidden_norm == 'layer_norm' else \
-                nn.InstanceNorm2d(hidden_channels) if hidden_norm == 'instance_norm' else\
-                nn.Identity(),
+                    nn.InstanceNorm2d(hidden_channels) if hidden_norm == 'instance_norm' else \
+                        nn.Identity(),
             activation_cls(),
             nn.Conv2d(hidden_channels, out_channels, kernel_size=kernel_size, padding=kernel_size // 2, padding_mode=padding_mode)
         )
-        
-        self.skip_connection = nn.Conv2d(in_channels, out_channels, kernel_size=1, padding=0) if in_channels != out_channels else nn.Identity()  
-  
-    def forward(self, x):  
-        skip = self.skip_connection(x)  
+
+        self.skip_connection = nn.Conv2d(in_channels, out_channels, kernel_size=1, padding=0) if in_channels != out_channels else nn.Identity()
+
+    def forward(self, x):
+        skip = self.skip_connection(x)
         x = self.layers(x)
         x = x + skip
-        return x  
+        return x
 
 
 class DINOv2Encoder(nn.Module):
@@ -131,7 +134,7 @@ class DINOv2Encoder(nn.Module):
         self.intermediate_layers = intermediate_layers
 
         # Load the backbone
-        self.hub_loader = getattr(importlib.import_module(".dinov2.hub.backbones", __package__), backbone)
+        self.hub_loader = getattr(importlib.import_module("dinov2.hub.backbones", __package__), backbone)
         self.backbone_name = backbone
         self.backbone = self.hub_loader(pretrained=False)
 
@@ -139,8 +142,8 @@ class DINOv2Encoder(nn.Module):
         self.num_features = intermediate_layers if isinstance(intermediate_layers, int) else len(intermediate_layers)
 
         self.output_projections = nn.ModuleList([
-            nn.Conv2d(in_channels=self.dim_features, out_channels=dim_out, kernel_size=1, stride=1, padding=0,) 
-                for _ in range(self.num_features)
+            nn.Conv2d(in_channels=self.dim_features, out_channels=dim_out, kernel_size=1, stride=1, padding=0, )
+            for _ in range(self.num_features)
         ])
 
         self.register_buffer("image_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
@@ -173,12 +176,12 @@ class DINOv2Encoder(nn.Module):
 
         # Get intermediate layers from the backbone
         features = self.backbone.get_intermediate_layers(image_14, n=self.intermediate_layers, return_class_token=True)
-    
+
         # Project features to the desired dimensionality
         x = torch.stack([
             proj(feat.permute(0, 2, 1).unflatten(2, (token_rows, token_cols)).contiguous())
-                for proj, (feat, clstoken) in zip(self.output_projections, features)
-        ], dim=1).sum(dim=1)                    
+            for proj, (feat, clstoken) in zip(self.output_projections, features)
+        ], dim=1).sum(dim=1)
 
         if return_class_token:
             return x, features[-1][1]
@@ -187,99 +190,100 @@ class DINOv2Encoder(nn.Module):
 
 
 class Resampler(nn.Sequential):
-    def __init__(self, 
-        in_channels: int, 
-        out_channels: int, 
-        type_: Literal['pixel_shuffle', 'nearest', 'bilinear', 'conv_transpose', 'pixel_unshuffle', 'avg_pool', 'max_pool'],
-        scale_factor: int = 2, 
-    ):
+    def __init__(self,
+                 in_channels: int,
+                 out_channels: int,
+                 type_: Literal['pixel_shuffle', 'nearest', 'bilinear', 'conv_transpose', 'pixel_unshuffle', 'avg_pool', 'max_pool'],
+                 scale_factor: int = 2,
+                 ):
         if type_ == 'pixel_shuffle':
             nn.Sequential.__init__(self,
-                nn.Conv2d(in_channels, out_channels * (scale_factor ** 2), kernel_size=3, stride=1, padding=1, padding_mode='replicate'),
-                nn.PixelShuffle(scale_factor),
-                nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-            )
+                                   nn.Conv2d(in_channels, out_channels * (scale_factor ** 2), kernel_size=3, stride=1, padding=1, padding_mode='replicate'),
+                                   nn.PixelShuffle(scale_factor),
+                                   nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
+                                   )
             for i in range(1, scale_factor ** 2):
                 self[0].weight.data[i::scale_factor ** 2] = self[0].weight.data[0::scale_factor ** 2]
                 self[0].bias.data[i::scale_factor ** 2] = self[0].bias.data[0::scale_factor ** 2]
         elif type_ in ['nearest', 'bilinear']:
             nn.Sequential.__init__(self,
-                nn.Upsample(scale_factor=scale_factor, mode=type_, align_corners=False if type_ == 'bilinear' else None),
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-            )
+                                   nn.Upsample(scale_factor=scale_factor, mode=type_, align_corners=False if type_ == 'bilinear' else None),
+                                   nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
+                                   )
         elif type_ == 'conv_transpose':
             nn.Sequential.__init__(self,
-                nn.ConvTranspose2d(in_channels, out_channels, kernel_size=scale_factor, stride=scale_factor),
-                nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-            )
+                                   nn.ConvTranspose2d(in_channels, out_channels, kernel_size=scale_factor, stride=scale_factor),
+                                   nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
+                                   )
             self[0].weight.data[:] = self[0].weight.data[:, :, :1, :1]
         elif type_ == 'pixel_unshuffle':
             nn.Sequential.__init__(self,
-                nn.PixelUnshuffle(scale_factor),
-                nn.Conv2d(in_channels * (scale_factor ** 2), out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-            )
-        elif type_ == 'avg_pool': 
+                                   nn.PixelUnshuffle(scale_factor),
+                                   nn.Conv2d(in_channels * (scale_factor ** 2), out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
+                                   )
+        elif type_ == 'avg_pool':
             nn.Sequential.__init__(self,
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate'),
-                nn.AvgPool2d(kernel_size=scale_factor, stride=scale_factor),
-            )
+                                   nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate'),
+                                   nn.AvgPool2d(kernel_size=scale_factor, stride=scale_factor),
+                                   )
         elif type_ == 'max_pool':
             nn.Sequential.__init__(self,
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate'),
-                nn.MaxPool2d(kernel_size=scale_factor, stride=scale_factor),
-            )
+                                   nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate'),
+                                   nn.MaxPool2d(kernel_size=scale_factor, stride=scale_factor),
+                                   )
         else:
             raise ValueError(f'Unsupported resampler type: {type_}')
+
 
 class MLP(nn.Sequential):
     def __init__(self, dims: Sequence[int]):
         nn.Sequential.__init__(self,
-            *itertools.chain(*[
-                (nn.Linear(dim_in, dim_out), nn.ReLU(inplace=True))
-                    for dim_in, dim_out in zip(dims[:-2], dims[1:-1])
-            ]),
-            nn.Linear(dims[-2], dims[-1]),
-        )
+                               *itertools.chain(*[
+                                   (nn.Linear(dim_in, dim_out), nn.ReLU(inplace=True))
+                                   for dim_in, dim_out in zip(dims[:-2], dims[1:-1])
+                               ]),
+                               nn.Linear(dims[-2], dims[-1]),
+                               )
 
 
 class ConvStack(nn.Module):
-    def __init__(self, 
-        dim_in: List[Optional[int]],
-        dim_res_blocks: List[int],
-        dim_out: List[Optional[int]],
-        resamplers: Union[Literal['pixel_shuffle', 'nearest', 'bilinear', 'conv_transpose', 'pixel_unshuffle', 'avg_pool', 'max_pool'], List],
-        dim_times_res_block_hidden: int = 1,
-        num_res_blocks: int = 1,
-        res_block_in_norm: Literal['layer_norm', 'group_norm' , 'instance_norm', 'none'] = 'layer_norm',
-        res_block_hidden_norm: Literal['layer_norm', 'group_norm' , 'instance_norm', 'none'] = 'group_norm',
-        activation: Literal['relu', 'leaky_relu', 'silu', 'elu'] = 'relu',
-    ):
+    def __init__(self,
+                 dim_in: List[Optional[int]],
+                 dim_res_blocks: List[int],
+                 dim_out: List[Optional[int]],
+                 resamplers: Union[Literal['pixel_shuffle', 'nearest', 'bilinear', 'conv_transpose', 'pixel_unshuffle', 'avg_pool', 'max_pool'], List],
+                 dim_times_res_block_hidden: int = 1,
+                 num_res_blocks: int = 1,
+                 res_block_in_norm: Literal['layer_norm', 'group_norm', 'instance_norm', 'none'] = 'layer_norm',
+                 res_block_hidden_norm: Literal['layer_norm', 'group_norm', 'instance_norm', 'none'] = 'group_norm',
+                 activation: Literal['relu', 'leaky_relu', 'silu', 'elu'] = 'relu',
+                 ):
         super().__init__()
         self.input_blocks = nn.ModuleList([
-            nn.Conv2d(dim_in_, dim_res_block_, kernel_size=1, stride=1, padding=0) if dim_in_ is not None else nn.Identity() 
-                for dim_in_, dim_res_block_ in zip(dim_in if isinstance(dim_in, Sequence) else itertools.repeat(dim_in), dim_res_blocks)
+            nn.Conv2d(dim_in_, dim_res_block_, kernel_size=1, stride=1, padding=0) if dim_in_ is not None else nn.Identity()
+            for dim_in_, dim_res_block_ in zip(dim_in if isinstance(dim_in, Sequence) else itertools.repeat(dim_in), dim_res_blocks)
         ])
         self.resamplers = nn.ModuleList([
-            Resampler(dim_prev, dim_succ, scale_factor=2, type_=resampler) 
-                for i, (dim_prev, dim_succ, resampler) in enumerate(zip(
-                    dim_res_blocks[:-1], 
-                    dim_res_blocks[1:], 
-                    resamplers if isinstance(resamplers, Sequence) else itertools.repeat(resamplers)
-                ))
+            Resampler(dim_prev, dim_succ, scale_factor=2, type_=resampler)
+            for i, (dim_prev, dim_succ, resampler) in enumerate(zip(
+                dim_res_blocks[:-1],
+                dim_res_blocks[1:],
+                resamplers if isinstance(resamplers, Sequence) else itertools.repeat(resamplers)
+            ))
         ])
         self.res_blocks = nn.ModuleList([
             nn.Sequential(
                 *(
                     ResidualConvBlock(
-                        dim_res_block_, dim_res_block_, dim_times_res_block_hidden * dim_res_block_, 
+                        dim_res_block_, dim_res_block_, dim_times_res_block_hidden * dim_res_block_,
                         activation=activation, in_norm=res_block_in_norm, hidden_norm=res_block_hidden_norm
                     ) for _ in range(num_res_blocks[i] if isinstance(num_res_blocks, list) else num_res_blocks)
                 )
             ) for i, dim_res_block_ in enumerate(dim_res_blocks)
         ])
         self.output_blocks = nn.ModuleList([
-            nn.Conv2d(dim_res_block_, dim_out_, kernel_size=1, stride=1, padding=0) if dim_out_ is not None else nn.Identity() 
-                for dim_out_, dim_res_block_ in zip(dim_out if isinstance(dim_out, Sequence) else itertools.repeat(dim_out), dim_res_blocks)
+            nn.Conv2d(dim_res_block_, dim_out_, kernel_size=1, stride=1, padding=0) if dim_out_ is not None else nn.Identity()
+            for dim_out_, dim_res_block_ in zip(dim_out if isinstance(dim_out, Sequence) else itertools.repeat(dim_out), dim_res_blocks)
         ])
 
     def enable_gradient_checkpointing(self):
@@ -303,7 +307,7 @@ class ConvStack(nn.Module):
                 x = self.resamplers[i](x)
         return out_features
 
-    
+
 class MoGeModel(nn.Module):
     encoder: DINOv2Encoder
     neck: ConvStack
@@ -312,28 +316,28 @@ class MoGeModel(nn.Module):
     scale_head: MLP
     onnx_compatible_mode: bool
 
-    def __init__(self, 
-        encoder: Dict[str, Any],
-        neck: Dict[str, Any],
-        points_head: Dict[str, Any] = None,
-        mask_head: Dict[str, Any] = None,
-        normal_head: Dict[str, Any] = None,
-        scale_head: Dict[str, Any] = None,
-        remap_output: Literal['linear', 'sinh', 'exp', 'sinh_exp'] = 'linear',
-        num_tokens_range: List[int] = [1200, 3600],
-        **deprecated_kwargs
-    ):
+    def __init__(self,
+                 encoder: Dict[str, Any],
+                 neck: Dict[str, Any],
+                 points_head: Dict[str, Any] = None,
+                 mask_head: Dict[str, Any] = None,
+                 normal_head: Dict[str, Any] = None,
+                 scale_head: Dict[str, Any] = None,
+                 remap_output: Literal['linear', 'sinh', 'exp', 'sinh_exp'] = 'linear',
+                 num_tokens_range: List[int] = [1200, 3600],
+                 **deprecated_kwargs
+                 ):
         super(MoGeModel, self).__init__()
         if deprecated_kwargs:
             warnings.warn(f"The following deprecated/invalid arguments are ignored: {deprecated_kwargs}")
 
         self.remap_output = remap_output
         self.num_tokens_range = num_tokens_range
-        
-        self.encoder = DINOv2Encoder(**encoder) 
+
+        self.encoder = DINOv2Encoder(**encoder)
         self.neck = ConvStack(**neck)
         if points_head is not None:
-            self.points_head = ConvStack(**points_head) 
+            self.points_head = ConvStack(**points_head)
         if mask_head is not None:
             self.mask_head = ConvStack(**mask_head)
         if normal_head is not None:
@@ -348,7 +352,7 @@ class MoGeModel(nn.Module):
     @property
     def dtype(self) -> torch.dtype:
         return next(self.parameters()).dtype
-    
+
     @property
     def onnx_compatible_mode(self) -> bool:
         return getattr(self, "_onnx_compatible_mode", False)
@@ -382,15 +386,15 @@ class MoGeModel(nn.Module):
                 **hf_kwargs
             )
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
-        
+
         model_config = checkpoint['model_config']
         if model_kwargs is not None:
             model_config.update(model_kwargs)
         model = cls(**model_config)
         model.load_state_dict(checkpoint['model'], strict=False)
-        
+
         return model
-    
+
     def init_weights(self):
         self.encoder.init_weights()
 
@@ -407,19 +411,19 @@ class MoGeModel(nn.Module):
     def _remap_points(self, points: torch.Tensor) -> torch.Tensor:
         if self.remap_output == 'linear':
             pass
-        elif self.remap_output =='sinh':
+        elif self.remap_output == 'sinh':
             points = torch.sinh(points)
         elif self.remap_output == 'exp':
             xy, z = points.split([2, 1], dim=-1)
             z = torch.exp(z)
             points = torch.cat([xy * z, z], dim=-1)
-        elif self.remap_output =='sinh_exp':
+        elif self.remap_output == 'sinh_exp':
             xy, z = points.split([2, 1], dim=-1)
             points = torch.cat([torch.sinh(xy), torch.exp(z)], dim=-1)
         else:
             raise ValueError(f"Invalid remap output type: {self.remap_output}")
         return points
-    
+
     def forward(self, image: torch.Tensor, num_tokens: Union[int, torch.LongTensor]) -> Dict[str, torch.Tensor]:
         batch_size, _, img_h, img_w = image.shape
         device, dtype = image.device, image.dtype
@@ -450,14 +454,14 @@ class MoGeModel(nn.Module):
         # Heads decoding
         points, normal, mask = (getattr(self, head)(features)[-1] if hasattr(self, head) else None for head in ['points_head', 'normal_head', 'mask_head'])
         metric_scale = self.scale_head(cls_token) if hasattr(self, 'scale_head') else None
-        
+
         # Resize
         points, normal, mask = (F.interpolate(v, (img_h, img_w), mode='bilinear', align_corners=False, antialias=False) if v is not None else None for v in [points, normal, mask])
-        
+
         # Remap output
         if points is not None:
             points = points.permute(0, 2, 3, 1)
-            points = self._remap_points(points)     # slightly improves the performance in case of very large output values
+            points = self._remap_points(points)  # slightly improves the performance in case of very large output values
         if normal is not None:
             normal = normal.permute(0, 2, 3, 1)
             normal = F.normalize(normal, dim=-1)
@@ -467,7 +471,7 @@ class MoGeModel(nn.Module):
             metric_scale = metric_scale.squeeze(1).exp()
 
         return_dict = {
-            'points': points, 
+            'points': points,
             'normal': normal,
             'mask': mask,
             'metric_scale': metric_scale
@@ -478,14 +482,14 @@ class MoGeModel(nn.Module):
 
     @torch.inference_mode()
     def infer(
-        self, 
-        image: torch.Tensor, 
-        num_tokens: int = None,
-        resolution_level: int = 9,
-        force_projection: bool = True,
-        apply_mask: bool = True,
-        fov_x: Optional[Union[Number, torch.Tensor]] = None,
-        use_fp16: bool = True,
+            self,
+            image: torch.Tensor,
+            num_tokens: int = None,
+            resolution_level: int = 9,
+            force_projection: bool = True,
+            apply_mask: bool = True,
+            fov_x: Optional[Union[Number, torch.Tensor]] = None,
+            use_fp16: bool = True,
     ) -> Dict[str, torch.Tensor]:
         """
         User-friendly inference function
@@ -516,7 +520,7 @@ class MoGeModel(nn.Module):
         original_height, original_width = image.shape[-2:]
         area = original_height * original_width
         aspect_ratio = original_width / original_height
-        
+
         # Determine the number of base tokens to use
         if num_tokens is None:
             min_tokens, max_tokens = self.num_tokens_range
@@ -534,7 +538,7 @@ class MoGeModel(nn.Module):
                 mask_binary = mask > 0.5
             else:
                 mask_binary = None
-                
+
             if points is not None:
                 # Convert affine point map to camera-space. Recover depth and intrinsics from point map.
                 # NOTE: Focal here is the focal length relative to half the image diagonal
@@ -547,11 +551,11 @@ class MoGeModel(nn.Module):
                     if focal.ndim == 0:
                         focal = focal[None].expand(points.shape[0])
                     _, shift = recover_focal_shift(points, mask_binary, focal=focal)
-                fx, fy = focal / 2 * (1 + aspect_ratio ** 2) ** 0.5 / aspect_ratio, focal / 2 * (1 + aspect_ratio ** 2) ** 0.5 
+                fx, fy = focal / 2 * (1 + aspect_ratio ** 2) ** 0.5 / aspect_ratio, focal / 2 * (1 + aspect_ratio ** 2) ** 0.5
                 intrinsics = utils3d.pt.intrinsics_from_focal_center(fx, fy, torch.tensor(0.5, device=points.device, dtype=points.dtype), torch.tensor(0.5, device=points.device, dtype=points.dtype))
                 points[..., 2] += shift[..., None, None]
                 if mask_binary is not None:
-                    mask_binary &= points[..., 2] > 0        # in case depth is contains negative values (which should never happen in practice)
+                    mask_binary &= points[..., 2] > 0  # in case depth is contains negative values (which should never happen in practice)
                 depth = points[..., 2].clone()
             else:
                 depth, intrinsics = None, None
@@ -572,7 +576,7 @@ class MoGeModel(nn.Module):
                 points = torch.where(mask_binary[..., None], points, torch.inf) if points is not None else None
                 depth = torch.where(mask_binary, depth, torch.inf) if depth is not None else None
                 normal = torch.where(mask_binary[..., None], normal, torch.zeros_like(normal)) if normal is not None else None
-                    
+
         return_dict = {
             'points': points,
             'intrinsics': intrinsics,

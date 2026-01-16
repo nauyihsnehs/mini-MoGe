@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 from scipy.signal import fftconvolve
 
-import utils3d
+import moge_utils3d as utils3d
 
 
 def catch_exception(fn):
@@ -23,11 +23,12 @@ def catch_exception(fn):
             return fn(*args, **kwargs)
         except Exception as e:
             import traceback
-            print(f"Exception in {fn.__name__}",  end='r')
+            print(f"Exception in {fn.__name__}", end='r')
             # print({', '.join(repr(arg) for arg in args)}, {', '.join(f'{k}={v!r}' for k, v in kwargs.items())})
             traceback.print_exc(chain=False)
             time.sleep(0.1)
             return None
+
     return wrapper
 
 
@@ -44,14 +45,15 @@ class CallbackOnException:
             self.callback()
             return True
         return False
-    
+
+
 def traverse_nested_dict_keys(d: Dict[str, Dict]) -> Generator[Tuple[str, ...], None, None]:
     for k, v in d.items():
         if isinstance(v, dict):
             for sub_key in traverse_nested_dict_keys(v):
-                yield (k, ) + sub_key
+                yield (k,) + sub_key
         else:
-            yield (k, )
+            yield (k,)
 
 
 def get_nested_dict(d: Dict[str, Dict], keys: Tuple[str, ...], default: Any = None):
@@ -60,6 +62,7 @@ def get_nested_dict(d: Dict[str, Dict], keys: Tuple[str, ...], default: Any = No
         if d is None:
             break
     return d
+
 
 def set_nested_dict(d: Dict[str, Dict], keys: Tuple[str, ...], value: Any):
     for k in keys[:-1]:
@@ -95,7 +98,7 @@ def flatten_nested_dict(d: Dict[str, Any], parent_key: Tuple[str, ...] = None) -
     if parent_key is None:
         parent_key = ()
     for k, v in d.items():
-        new_key = parent_key + (k, )
+        new_key = parent_key + (k,)
         if isinstance(v, MutableMapping):
             items.extend(flatten_nested_dict(v, new_key).items())
         else:
@@ -137,7 +140,7 @@ def to_hierachical_dataframe(data: List[Dict[Tuple[str, ...], Any]]):
     data = [flatten_nested_dict(d) for d in data]
     df = pd.DataFrame(data)
     df = df.sort_index(axis=1)
-    df.columns = pd.MultiIndex.from_tuples(df.columns)  
+    df.columns = pd.MultiIndex.from_tuples(df.columns)
     return df
 
 
@@ -173,14 +176,16 @@ class timeit:
                 with timeit(self.name or func.__qualname__):
                     ret = await func(*args, **kwargs)
                 return ret
+
             return wrapper
         else:
             def wrapper(*args, **kwargs):
                 with timeit(self.name or func.__qualname__):
                     ret = func(*args, **kwargs)
                 return ret
+
             return wrapper
-        
+
     def __enter__(self):
         self.start = time.time()
         return self
@@ -226,7 +231,7 @@ def strip_common_prefix_suffix(strings: List[str]) -> List[str]:
     return [s[start:len(s) - end + 1] for s in strings]
 
 
-def multithead_execute(inputs: List[Any], num_workers: int, pbar = None):
+def multithead_execute(inputs: List[Any], num_workers: int, pbar=None):
     from concurrent.futures import ThreadPoolExecutor
     from tqdm import tqdm
 
@@ -239,17 +244,19 @@ def multithead_execute(inputs: List[Any], num_workers: int, pbar = None):
         with (
             ThreadPoolExecutor(max_workers=num_workers) as executor,
             pbar
-        ):  
+        ):
             pbar.refresh()
+
             @catch_exception
             @suppress_traceback
             def _fn(input):
                 ret = fn(input)
                 pbar.update()
                 return ret
+
             executor.map(_fn, inputs)
             executor.shutdown(wait=True)
-    
+
     return decorator
 
 
@@ -261,6 +268,7 @@ def suppress_traceback(fn):
         except Exception as e:
             e.__traceback__ = e.__traceback__.tb_next.tb_next
             raise
+
     return wrapper
 
 
@@ -268,20 +276,21 @@ class no_warnings:
     def __init__(self, action: str = 'ignore', **kwargs):
         self.action = action
         self.filter_kwargs = kwargs
-    
+
     def __call__(self, fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
             with warnings.catch_warnings():
                 warnings.simplefilter(self.action, **self.filter_kwargs)
                 return fn(*args, **kwargs)
-        return wrapper  
-    
+
+        return wrapper
+
     def __enter__(self):
         self.warnings_manager = warnings.catch_warnings()
         self.warnings_manager.__enter__()
         warnings.simplefilter(self.action, **self.filter_kwargs)
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.warnings_manager.__exit__(exc_type, exc_val, exc_tb)
 
@@ -293,7 +302,7 @@ def import_file_as_module(file_path: Union[str, os.PathLike], module_name: str):
     return module
 
 
-def weighted_mean_numpy(x: np.ndarray, w: np.ndarray = None, axis: Union[int, Tuple[int,...]] = None, keepdims: bool = False, eps: float = 1e-7) -> np.ndarray:
+def weighted_mean_numpy(x: np.ndarray, w: np.ndarray = None, axis: Union[int, Tuple[int, ...]] = None, keepdims: bool = False, eps: float = 1e-7) -> np.ndarray:
     if w is None:
         return np.mean(x, axis=axis)
     else:
@@ -301,7 +310,7 @@ def weighted_mean_numpy(x: np.ndarray, w: np.ndarray = None, axis: Union[int, Tu
         return (x * w).mean(axis=axis) / np.clip(w.mean(axis=axis), eps, None)
 
 
-def harmonic_mean_numpy(x: np.ndarray, w: np.ndarray = None, axis: Union[int, Tuple[int,...]] = None, keepdims: bool = False, eps: float = 1e-7) -> np.ndarray:
+def harmonic_mean_numpy(x: np.ndarray, w: np.ndarray = None, axis: Union[int, Tuple[int, ...]] = None, keepdims: bool = False, eps: float = 1e-7) -> np.ndarray:
     if w is None:
         return 1 / (1 / np.clip(x, eps, None)).mean(axis=axis)
     else:
@@ -313,7 +322,7 @@ def normalized_view_plane_uv_numpy(width: int, height: int, aspect_ratio: float 
     "UV with left-top corner as (-width / diagonal, -height / diagonal) and right-bottom corner as (width / diagonal, height / diagonal)"
     if aspect_ratio is None:
         aspect_ratio = width / height
-    
+
     span_x = aspect_ratio / (1 + aspect_ratio ** 2) ** 0.5
     span_y = 1 / (1 + aspect_ratio ** 2) ** 0.5
 
@@ -345,10 +354,10 @@ def point_map_to_depth_legacy_numpy(points: np.ndarray):
     _, uv = np.broadcast_arrays(points[..., :2], uv)
 
     # Solve least squares problem
-    b = (uv * points[..., 2:]).reshape(*points.shape[:-3], -1)                                  # (..., H * W * 2)
-    A = np.stack([points[..., :2], -uv], axis=-1).reshape(*points.shape[:-3], -1, 2)   # (..., H * W * 2, 2)
+    b = (uv * points[..., 2:]).reshape(*points.shape[:-3], -1)  # (..., H * W * 2)
+    A = np.stack([points[..., :2], -uv], axis=-1).reshape(*points.shape[:-3], -1, 2)  # (..., H * W * 2, 2)
 
-    M = A.swapaxes(-2, -1) @ A 
+    M = A.swapaxes(-2, -1) @ A
     solution = (np.linalg.inv(M + 1e-6 * np.eye(2)) @ (A.swapaxes(-2, -1) @ b[..., None])).squeeze(-1)
     focal, shift = solution
 
@@ -364,7 +373,7 @@ def solve_optimal_focal_shift(uv: np.ndarray, xyz: np.ndarray):
     uv, xy, z = uv.reshape(-1, 2), xyz[..., :2].reshape(-1, 2), xyz[..., 2].reshape(-1)
 
     def fn(uv: np.ndarray, xy: np.ndarray, z: np.ndarray, shift: np.ndarray):
-        xy_proj = xy / (z + shift)[: , None]
+        xy_proj = xy / (z + shift)[:, None]
         f = (xy_proj * uv).sum() / np.square(xy_proj).sum()
         err = (f * xy_proj - uv).ravel()
         return err
@@ -372,7 +381,7 @@ def solve_optimal_focal_shift(uv: np.ndarray, xyz: np.ndarray):
     solution = least_squares(partial(fn, uv, xy, z), x0=0, ftol=1e-3, method='lm')
     optim_shift = solution['x'].squeeze().astype(np.float32)
 
-    xy_proj = xy / (z + optim_shift)[: , None]
+    xy_proj = xy / (z + optim_shift)[:, None]
     optim_focal = (xy_proj * uv).sum() / np.square(xy_proj).sum()
 
     return optim_shift, optim_focal
@@ -384,7 +393,7 @@ def solve_optimal_shift(uv: np.ndarray, xyz: np.ndarray, focal: float):
     uv, xy, z = uv.reshape(-1, 2), xyz[..., :2].reshape(-1, 2), xyz[..., 2].reshape(-1)
 
     def fn(uv: np.ndarray, xy: np.ndarray, z: np.ndarray, shift: np.ndarray):
-        xy_proj = xy / (z + shift)[: , None]
+        xy_proj = xy / (z + shift)[:, None]
         err = (focal * xy_proj - uv).ravel()
         return err
 
@@ -402,18 +411,18 @@ def recover_focal_shift_numpy(points: np.ndarray, mask: np.ndarray = None, focal
     diagonal = (height ** 2 + width ** 2) ** 0.5
 
     uv = normalized_view_plane_uv_numpy(width=width, height=height)
-    
+
     if mask is None:
         points_lr = cv2.resize(points, downsample_size, interpolation=cv2.INTER_LINEAR).reshape(-1, 3)
         uv_lr = cv2.resize(uv, downsample_size, interpolation=cv2.INTER_LINEAR).reshape(-1, 2)
     else:
         points_lr, uv_lr, mask_lr = utils3d.np.masked_nearest_resize(points, uv, mask=mask, size=downsample_size)
-    
+
     if points_lr.size < 2:
         return 1., 0.
-    
+
     if focal is None:
-        shift,focal = solve_optimal_focal_shift(uv_lr, points_lr)
+        shift, focal = solve_optimal_focal_shift(uv_lr, points_lr)
     else:
         shift = solve_optimal_shift(uv_lr, points_lr, focal)
 
@@ -423,7 +432,7 @@ def recover_focal_shift_numpy(points: np.ndarray, mask: np.ndarray = None, focal
 def norm3d(x: np.ndarray) -> np.ndarray:
     "Faster `np.linalg.norm(x, axis=-1)` for 3D vectors"
     return np.sqrt(np.square(x[..., 0]) + np.square(x[..., 1]) + np.square(x[..., 2]))
-    
+
 
 def depth_occlusion_edge_numpy(depth: np.ndarray, mask: np.ndarray, thickness: int = 1, tol: float = 0.1):
     disp = np.where(mask, 1 / depth, 0)
@@ -438,7 +447,7 @@ def depth_occlusion_edge_numpy(depth: np.ndarray, mask: np.ndarray, thickness: i
     bg_edge_mask = mask & (disp_mean > (1 + tol) * disp)
 
     edge_mask = (cv2.dilate(fg_edge_mask.astype(np.uint8), np.ones((3, 3), dtype=np.uint8), iterations=thickness) > 0) \
-        & (cv2.dilate(bg_edge_mask.astype(np.uint8), np.ones((3, 3), dtype=np.uint8), iterations=thickness) > 0)
+                & (cv2.dilate(bg_edge_mask.astype(np.uint8), np.ones((3, 3), dtype=np.uint8), iterations=thickness) > 0)
 
     return edge_mask
 
@@ -457,7 +466,7 @@ def disk_kernel(radius: int) -> np.ndarray:
     L = np.arange(-radius, radius + 1)
     X, Y = np.meshgrid(L, L)
     # Generate disk: region inside circle with radius R is 1
-    kernel = ((X**2 + Y**2) <= radius**2).astype(np.float32)
+    kernel = ((X ** 2 + Y ** 2) <= radius ** 2).astype(np.float32)
     # Normalize the kernel
     kernel /= np.sum(kernel)
     return kernel
@@ -491,10 +500,10 @@ def disk_blur(image: np.ndarray, radius: int) -> np.ndarray:
 
 
 def depth_of_field(
-    img: np.ndarray, 
-    disp: np.ndarray, 
-    focus_disp : float, 
-    max_blur_radius : int = 10,
+        img: np.ndarray,
+        disp: np.ndarray,
+        focus_disp: float,
+        max_blur_radius: int = 10,
 ) -> np.ndarray:
     """
     Apply depth of field effect to an image.
@@ -515,8 +524,8 @@ def depth_of_field(
     focus_disp = focus_disp / max_disp
     dilated_disp = []
     for radius in range(max_blur_radius + 1):
-        dilated_disp.append(cv2.dilate(disp, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*radius+1, 2*radius+1)), iterations=1))
-        
+        dilated_disp.append(cv2.dilate(disp, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)), iterations=1))
+
     # Determine the blur radius for each pixel based on the depth map
     blur_radii = np.clip(abs(disp - focus_disp) * max_blur_radius, 0, max_blur_radius).astype(np.int32)
     for radius in range(max_blur_radius + 1):
@@ -533,13 +542,13 @@ def depth_of_field(
         if radius not in unique_radii:
             continue
         precomputed[radius] = disk_blur(img, radius)
-        
+
     # Composit the blured image for each pixel
     output = np.zeros_like(img)
     for r in unique_radii:
         mask = blur_radii == r
         output[mask] = precomputed[r][mask]
-        
+
     return output
 
 
@@ -571,7 +580,7 @@ def normalized_view_plane_uv(width: int, height: int, aspect_ratio: float = None
     "UV with left-top corner as (-width / diagonal, -height / diagonal) and right-bottom corner as (width / diagonal, height / diagonal)"
     if aspect_ratio is None:
         aspect_ratio = width / height
-    
+
     span_x = aspect_ratio / (1 + aspect_ratio ** 2) ** 0.5
     span_y = 1 / (1 + aspect_ratio ** 2) ** 0.5
 
@@ -624,10 +633,10 @@ def point_map_to_depth_legacy(points: torch.Tensor):
     uv = normalized_view_plane_uv(width, height, dtype=points.dtype, device=points.device)  # (H, W, 2)
 
     # Solve least squares problem
-    b = (uv * points[..., 2:]).flatten(-3, -1)                        # (..., H * W * 2)
-    A = torch.stack([points[..., :2], -uv.expand_as(points[..., :2])], dim=-1).flatten(-4, -2)   # (..., H * W * 2, 2)
+    b = (uv * points[..., 2:]).flatten(-3, -1)  # (..., H * W * 2)
+    A = torch.stack([points[..., :2], -uv.expand_as(points[..., :2])], dim=-1).flatten(-4, -2)  # (..., H * W * 2, 2)
 
-    M = A.transpose(-2, -1) @ A 
+    M = A.transpose(-2, -1) @ A
     solution = (torch.inverse(M + 1e-6 * torch.eye(2).to(A)) @ (A.transpose(-2, -1) @ b[..., None])).squeeze(-1)
     focal, shift = solution.unbind(-1)
 
@@ -672,7 +681,7 @@ def recover_focal_shift(points: torch.Tensor, mask: torch.Tensor = None, focal: 
     points_lr = F.interpolate(points.permute(0, 3, 1, 2), downsample_size, mode='nearest').permute(0, 2, 3, 1)
     uv_lr = F.interpolate(uv.unsqueeze(0).permute(0, 3, 1, 2), downsample_size, mode='nearest').squeeze(0).permute(1, 2, 0)
     mask_lr = None if mask is None else F.interpolate(mask.to(torch.float32).unsqueeze(1), downsample_size, mode='nearest').squeeze(1) > 0
-    
+
     uv_lr_np = uv_lr.cpu().numpy()
     points_lr_np = points_lr.detach().cpu().numpy()
     focal_np = focal.cpu().numpy() if focal is not None else None
@@ -705,12 +714,12 @@ def theshold_depth_change(depth: torch.Tensor, mask: torch.Tensor, pooler: Liter
     *batch_shape, height, width = depth.shape
     depth = depth.reshape(-1, 1, height, width)
     mask = mask.reshape(-1, 1, height, width)
-    if pooler =='max':
+    if pooler == 'max':
         pooled_depth = F.max_pool2d(torch.where(mask, depth, -torch.inf), kernel_size, stride=1, padding=kernel_size // 2)
         output_mask = pooled_depth > depth * (1 + rtol)
-    elif pooler =='min':
+    elif pooler == 'min':
         pooled_depth = -F.max_pool2d(-torch.where(mask, depth, torch.inf), kernel_size, stride=1, padding=kernel_size // 2)
-        output_mask =  pooled_depth < depth * (1 - rtol)
+        output_mask = pooled_depth < depth * (1 - rtol)
     else:
         raise ValueError(f'Unsupported pooler: {pooler}')
     output_mask = output_mask.reshape(*batch_shape, height, width)
@@ -721,14 +730,14 @@ def dilate_with_mask(input: torch.Tensor, mask: torch.BoolTensor, filter: Litera
     kernel = torch.tensor([[False, True, False], [True, True, True], [False, True, False]], device=input.device, dtype=torch.bool)
     for _ in range(iterations):
         input_window = utils3d.pt.sliding_window(F.pad(input, (1, 1, 1, 1), mode='constant', value=0), window_size=3, stride=1, dim=(-2, -1))
-        mask_window = kernel & utils3d.pt.sliding_window(F.pad(mask, (1, 1, 1, 1), mode='constant', value=False), window_size=3, stride=1, dim=(-2, -1))    
-        if filter =='min':
+        mask_window = kernel & utils3d.pt.sliding_window(F.pad(mask, (1, 1, 1, 1), mode='constant', value=False), window_size=3, stride=1, dim=(-2, -1))
+        if filter == 'min':
             input = torch.where(mask, input, torch.where(mask_window, input_window, torch.inf).min(dim=(-2, -1)).values)
-        elif filter =='max':
+        elif filter == 'max':
             input = torch.where(mask, input, torch.where(mask_window, input_window, -torch.inf).max(dim=(-2, -1)).values)
         elif filter == 'mean':
             input = torch.where(mask, input, torch.where(mask_window, input_window, torch.nan).nanmean(dim=(-2, -1)))
-        elif filter =='median':
+        elif filter == 'median':
             input = torch.where(mask, input, torch.where(mask_window, input_window, torch.nan).flatten(-2).nanmedian(dim=-1).values)
         mask = mask_window.any(dim=(-2, -1))
     return input, mask
@@ -742,8 +751,8 @@ def refine_depth_with_normal(depth: torch.Tensor, normal: torch.Tensor, intrinsi
     duv = torch.stack(torch.meshgrid(torch.linspace(-radius / width, radius / width, kernel_size, device=device, dtype=dtype), torch.linspace(-radius / height, radius / height, kernel_size, device=device, dtype=dtype), indexing='xy'), dim=-1).to(dtype=dtype, device=device)
 
     log_depth = depth.clamp_min_(eps).log()
-    log_depth_diff = utils3d.pt.sliding_window(log_depth, window_size=kernel_size, stride=1, dim=(-2, -1)) - log_depth[..., radius:-radius, radius:-radius, None, None] 
-    
+    log_depth_diff = utils3d.pt.sliding_window(log_depth, window_size=kernel_size, stride=1, dim=(-2, -1)) - log_depth[..., radius:-radius, radius:-radius, None, None]
+
     weight = torch.exp(-(log_depth_diff / duv.norm(dim=-1).clamp_min_(eps) / 10).square())
     tot_weight = weight.sum(dim=(-2, -1)).clamp_min_(eps)
 
@@ -751,14 +760,14 @@ def refine_depth_with_normal(depth: torch.Tensor, normal: torch.Tensor, intrinsi
     K_inv = torch.inverse(intrinsics)
 
     grad = -(normal[..., None, :2] @ K_inv[..., None, None, :2, :2]).squeeze(-2) \
-            / (normal[..., None, 2:] + normal[..., None, :2] @ (K_inv[..., None, None, :2, :2] @ uv[..., :, None] + K_inv[..., None, None, :2, 2:])).squeeze(-2)
+           / (normal[..., None, 2:] + normal[..., None, :2] @ (K_inv[..., None, None, :2, :2] @ uv[..., :, None] + K_inv[..., None, None, :2, 2:])).squeeze(-2)
     laplacian = (weight * ((utils3d.pt.sliding_window(grad, window_size=kernel_size, stride=1, dim=(-3, -2)) + grad[..., radius:-radius, radius:-radius, :, None, None]) * (duv.permute(2, 0, 1) / 2)).sum(dim=-3)).sum(dim=(-2, -1))
-    
+
     laplacian = laplacian.clamp(-0.1, 0.1)
     log_depth_refine = log_depth.clone()
 
     for _ in range(iterations):
-        log_depth_refine[..., radius:-radius, radius:-radius] = 0.1 * log_depth_refine[..., radius:-radius, radius:-radius] + 0.9 * (damp * log_depth[..., radius:-radius, radius:-radius] - laplacian + (weight * utils3d.pt.sliding_window_2d(log_depth_refine, window_size=kernel_size, stride=1, dim=(-2, -1))).sum(dim=(-2, -1))) / (tot_weight + damp) 
+        log_depth_refine[..., radius:-radius, radius:-radius] = 0.1 * log_depth_refine[..., radius:-radius, radius:-radius] + 0.9 * (damp * log_depth[..., radius:-radius, radius:-radius] - laplacian + (weight * utils3d.pt.sliding_window_2d(log_depth_refine, window_size=kernel_size, stride=1, dim=(-2, -1))).sum(dim=(-2, -1))) / (tot_weight + damp)
 
     depth_refine = log_depth_refine.exp()
 

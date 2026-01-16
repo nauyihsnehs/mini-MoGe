@@ -1,8 +1,3 @@
-"""
-Minimal 3D utility helpers used by MoGe.
-"""
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Iterable, Tuple
 

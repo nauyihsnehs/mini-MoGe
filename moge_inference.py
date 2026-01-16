@@ -3,7 +3,7 @@ from typing import Dict, Optional, Union
 
 import torch
 
-from moge.model import MoGeModel
+from moge_model import MoGeModel
 
 
 def intrinsics_to_fov(intrinsics: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -27,11 +27,11 @@ class MoGeDepthModel:
 
     @classmethod
     def from_pretrained(
-        cls,
-        pretrained_model_name_or_path: Union[str, Path],
-        device: Union[str, torch.device] = "cuda",
-        use_fp16: bool = False,
-        **hf_kwargs,
+            cls,
+            pretrained_model_name_or_path: Union[str, Path],
+            device: Union[str, torch.device] = "cuda",
+            use_fp16: bool = False,
+            **hf_kwargs,
     ) -> "MoGeDepthModel":
         model = MoGeModel.from_pretrained(pretrained_model_name_or_path, **hf_kwargs).to(device).eval()
         if use_fp16:
@@ -40,22 +40,22 @@ class MoGeDepthModel:
 
     @torch.inference_mode()
     def infer_depth(
-        self,
-        images: torch.Tensor,
-        fov_x: Optional[float] = None,
-        resolution_level: int = 9,
-        num_tokens: Optional[int] = None,
-        use_fp16: Optional[bool] = None,
+            self,
+            images: torch.Tensor,
+            fov_x: Optional[float] = None,
+            resolution_level: int = 9,
+            num_tokens: Optional[int] = None,
+            use_fp16: Optional[bool] = None,
     ) -> Dict[str, torch.Tensor]:
         if use_fp16 is None:
             use_fp16 = self._default_use_fp16
 
         with torch.autocast(
-            device_type=self.device.type,
-            dtype=torch.float16,
-            enabled=use_fp16 and self.dtype != torch.float16,
+                device_type=self.device.type,
+                dtype=torch.float16,
+                enabled=use_fp16 and self.dtype != torch.float16,
         ):
-            output = self.model(
+            output = self.model.infer(
                 images,
                 fov_x=fov_x,
                 resolution_level=resolution_level,
@@ -82,11 +82,11 @@ class DepthBatchInferencer:
 
     @classmethod
     def from_pretrained(
-        cls,
-        pretrained_model_name_or_path: Union[str, Path],
-        device: Union[str, torch.device] = "cuda",
-        use_fp16: bool = False,
-        **hf_kwargs,
+            cls,
+            pretrained_model_name_or_path: Union[str, Path],
+            device: Union[str, torch.device] = "cuda",
+            use_fp16: bool = False,
+            **hf_kwargs,
     ) -> "DepthBatchInferencer":
         model = MoGeDepthModel.from_pretrained(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
@@ -101,12 +101,12 @@ class DepthBatchInferencer:
         return self.model.device
 
     def infer_batch(
-        self,
-        images: torch.Tensor,
-        fov_x: Optional[float] = None,
-        resolution_level: int = 9,
-        num_tokens: Optional[int] = None,
-        use_fp16: Optional[bool] = None,
+            self,
+            images: torch.Tensor,
+            fov_x: Optional[float] = None,
+            resolution_level: int = 9,
+            num_tokens: Optional[int] = None,
+            use_fp16: Optional[bool] = None,
     ) -> Dict[str, torch.Tensor]:
         return self.model.infer_depth(
             images,
